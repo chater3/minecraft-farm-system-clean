@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# secrets & local data
+.env
+.env.*
+!.env.example
+*.db
+accounts.db
+successful_accounts.txt
+
+# build / IDE
+.gradle/
+build/
+out/
+dist/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# runtime / temp
+temp_captcha/
+*.log
+hs_err_*.log
+replay_*.log
+current_captcha.png
+
+# fabric loom
+fabric-worker/run/

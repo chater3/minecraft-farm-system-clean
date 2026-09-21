@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "farmworker",
+  "version": "1.0.0",
+  "name": "AutoRegWorker",
+  "description": "Авторегер для FunTime",
+  "authors": ["Farm"],
+  "contact": {},
+  "license": "CC0-1.0",
+  "icon": "assets/farmworker/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.farm.AutoRegMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.4",
+    "java": ">=21"
+  }
+}
