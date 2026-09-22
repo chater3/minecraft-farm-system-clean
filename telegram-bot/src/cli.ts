@@ -9,15 +9,19 @@
  */
 import 'dotenv/config';
 import http from 'http';
-import { addAccount, getStats, resetInProgress } from './database/db';
+import fs from 'fs';
+import { join } from 'path';
+import readline from 'readline/promises';
+import { addAccount, getStats, resetInProgress, exportToTxt, exportAllToTxt } from './database/db';
 import { enqueueRegistration, type RegistrationResult } from './queue/taskManager';
-import { log, logError, createRunLog, getRunLog } from './logger';
+import { log, logError, createRunLog, getRunLog, LOG_DIR } from './logger';
 import { initProxies, startBridge, stopBridge } from './proxy/proxyBridge';
 
 interface Options {
   users: string[];
   password: string;
   prefix: string;
+  count: number;
   skipSolverCheck: boolean;
   timeoutMs: number;
 }
@@ -27,6 +31,7 @@ function parseArgs(argv: string[]): Options {
     users: [],
     password: process.env.DEFAULT_REG_PASSWORD || 'AutoPass123',
     prefix: process.env.AUTO_NICK_PREFIX || 'Auto',
+    count: 0,
     skipSolverCheck: false,
     timeoutMs: parseInt(process.env.RUN_TIMEOUT_MS || '900000', 10),
   };
@@ -47,10 +52,10 @@ function parseArgs(argv: string[]): Options {
         break;
       case '--count':
       case '-c': {
-        const count = parseInt(argv[++i] || '1', 10);
-        for (let n = 0; n < count; n++) {
-          opts.users.push(`${opts.prefix}_${Math.floor(1000 + Math.random() * 9000)}`);
-        }
+        // количество считаем ТОЛЬКО здесь, а генерируем ники в main() —
+        // иначе --prefix после --count не применялся к случайным никам
+        const n = parseInt(argv[++i] || '1', 10);
+        opts.count = Number.isNaN(n) || n < 1 ? 1 : n;
         break;
       }
       case '--skip-solver-check':
@@ -75,17 +80,15 @@ function parseArgs(argv: string[]): Options {
     }
   }
 
-  if (opts.users.length === 0) {
-    opts.users.push(`${opts.prefix}_${Math.floor(1000 + Math.random() * 9000)}`);
-  }
-
   return opts;
 }
 
 function printHelp() {
   log(
-    'Использование: npm run reg -- [--user <ник>] [--pass <пароль>] [--count <N>] [--prefix <префикс>] [--skip-solver-check] [--timeout <мс>]',
+    'Использование: npm run reg [--count <N>] [--user <ник>] [--pass <пароль>] [--prefix <префикс>] [--skip-solver-check] [--timeout <мс>]',
   );
+  log('  --count N       — сразу N случайных ников (префикс из --prefix).');
+  log('  Без ников и --count в терминале — спросит, сколько аккаунтов запустить.');
 }
 
 function checkSolver(timeoutMs = 3000): Promise<boolean> {
@@ -105,6 +108,37 @@ function checkSolver(timeoutMs = 3000): Promise<boolean> {
 async function main() {
   const runLogFile = createRunLog('autoreg');
   const opts = parseArgs(process.argv.slice(2));
+
+  // --- выбор количества аккаунтов ---
+  const usedNicks = new Set(opts.users);
+  const addRandomNicks = (n: number) => {
+    for (let i = 0; i < n; i++) {
+      let nick = '';
+      do {
+        nick = `${opts.prefix}_${Math.floor(1000 + Math.random() * 9000)}`;
+      } while (usedNicks.has(nick)); // не даём совпасть случайным никам
+      usedNicks.add(nick);
+      opts.users.push(nick);
+    }
+  };
+
+  if (opts.count > 0) addRandomNicks(opts.count);
+
+  if (opts.users.length === 0) {
+    // ни --count, ни --user: в терминале спрашиваем, иначе 1 ник (как раньше)
+    let count = 1;
+    if (process.stdin.isTTY) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const answer = (await rl.question('Сколько аккаунтов запустить? (Enter = 1): ')).trim();
+        count = Math.max(1, parseInt(answer, 10) || 1);
+      } finally {
+        rl.close();
+      }
+    }
+    addRandomNicks(count);
+    log(`[CLI] Сгенерировано ников: ${count} (префикс ${opts.prefix})`);
+  }
 
   // дедупликация ников (БД помечает UNIQUE через INSERT OR IGNORE)
   opts.users = [...new Set(opts.users)];
@@ -148,14 +182,21 @@ async function main() {
 
   const results: RegistrationResult[] = [];
 
+  // задачи КЛАДЁМ в очередь все сразу — пул (PARALLEL) сам их распараллелит,
+  // последовательный await в цикле грозил упереться в общий таймаут
   for (const user of opts.users) {
     addAccount(user, opts.password);
     log(`[CLI] Задача добавлена в очередь: ${user}`);
-    results.push(await enqueueRegistration(user, opts.password).then((r) => {
-      log(`[CLI] Результат ${user}: ${r.status} (${r.detail})`);
-      return r;
-    }));
   }
+  const settled = await Promise.all(
+    opts.users.map((user) =>
+      enqueueRegistration(user, opts.password).then((r) => {
+        log(`[CLI] Результат ${user}: ${r.status} (${r.detail})`);
+        return r;
+      }),
+    ),
+  );
+  results.push(...settled);
 
   clearTimeout(watchdog);
   stopBridge();
@@ -169,6 +210,20 @@ async function main() {
     log(`  ${r.status === 'SUCCESS' ? '✅' : '❌'} ${r.username} — ${r.detail}`);
   }
   log(`БД: всего ${stats.total} | успех ${stats.success} | ошибка ${stats.failed} | в процессе ${stats.inProgress}`);
+
+  // ник + пароль — текстовыми файлами, чтобы не лезть в SQLite
+  try {
+    const successFile = join(LOG_DIR, 'success-accounts.txt');
+    const allFile = join(LOG_DIR, 'accounts-all.txt');
+    const successData = exportToTxt();
+    fs.writeFileSync(successFile, successData ? successData + '\n' : '', 'utf8');
+    fs.writeFileSync(allFile, (exportAllToTxt() || '') + '\n', 'utf8');
+    log(`[CLI] Ник+пароль сохранены: ${successFile} (успешных: ${stats.success})`);
+    log(`[CLI] Полный список: ${allFile} (ник:пароль:статус, всего ${stats.total})`);
+  } catch (err) {
+    logError('[CLI] Не удалось сохранить файлы аккаунтов:', err);
+  }
+
   log(`Лог: ${getRunLog()}`);
   log('====================================================');
 

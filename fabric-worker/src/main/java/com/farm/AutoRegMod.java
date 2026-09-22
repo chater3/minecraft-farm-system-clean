@@ -339,7 +339,12 @@ public class AutoRegMod implements ClientModInitializer {
             }
 
             BufferedImage crop = shot.getSubimage(x, y, w, h);
-            File out = MapRenderer.saveImage(crop, "current_captcha.png");
+            // уникальное имя на процесс: два клиента в одной папке не перетирают файл
+            File out = MapRenderer.saveImage(crop,
+                    "captcha_" + ProcessHandle.current().pid() + "_" + System.currentTimeMillis() + ".png");
+            try {
+                MapRenderer.saveImage(crop, "current_captcha.png"); // отладочная копия «последнего» кропа
+            } catch (Throwable ignored) { /* гонка двух клиентов не страшна */ }
 
             System.out.printf("[FarmWorker] STATE CROP x=%d y=%d w=%d h=%d corners=(%d,%d)-(%d,%d) img=%dx%d%n",
                     x, y, w, h, c1[0], c1[1], c2[0], c2[1], shot.getWidth(), shot.getHeight());
@@ -433,6 +438,11 @@ public class AutoRegMod implements ClientModInitializer {
             solveAttempts++;
             if (solveAttempts >= 5) System.exit(7);
             else requestShot("solve_exc" + solveAttempts);
+        } finally {
+            // временный кропcaptcha_<pid>_<ts>.png больше не нужен — убираем
+            try {
+                if (baseImage != null && baseImage.getName().startsWith("captcha_")) baseImage.delete();
+            } catch (Throwable ignored) { /* не мешаем выходу */ }
         }
     }
 
@@ -521,7 +531,17 @@ public class AutoRegMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         if (now - lastShotAt < 1500) return;
         lastShotAt = now;
-        String name = "autoreg_" + tag + "_" + now;
+        // префикс юзером: два клиента в общей папке screenshots не путают файлы
+        String uname = System.getProperty("farm.username");
+        if (uname == null || uname.isEmpty()) {
+            try {
+                uname = client.getSession().getUsername();
+            } catch (Throwable t) {
+                uname = "player";
+            }
+        }
+        uname = uname.replaceAll("[^A-Za-z0-9_]", "_");
+        String name = "autoreg_" + uname + "_" + tag + "_" + now;
         try {
             ScreenshotRecorder.saveScreenshot(
                     client.runDirectory,

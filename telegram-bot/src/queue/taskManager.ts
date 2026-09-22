@@ -168,10 +168,12 @@ function collectScreenshots(username: string, startedAt: number): string[] {
       return copied;
     }
     fs.mkdirSync(dst, { recursive: true });
+    const mine = `autoreg_${username}_`.toLowerCase();
     for (const name of fs.readdirSync(src)) {
-      // мод пишет файлы БЕЗ расширения (autoreg_wall_<ts>), поэтому пропускаем
-      // только явно не-изображения (точка есть, но это не картинка)
+      // файлы теперь с префиксом юзера — не забираем чужие скриншоты
+      // (расширение опционально: мод пишет autoreg_<user>_<tag>_<ts> без .png)
       const lower = name.toLowerCase();
+      if (!lower.startsWith(mine)) continue;
       if (lower.includes('.') && !/\.(png|jpe?g|webp)$/.test(lower)) continue;
       const file = join(src, name);
       try {
@@ -233,6 +235,7 @@ export function enqueueRegistration(username: string, password: string): Promise
             Argument.from([`-Xmx${MEMORY_MAX}`]),
             Argument.from([`-Xms${MEMORY_MIN}`]),
             Argument.from([`-Dfarm.password=${password}`]),
+            Argument.from([`-Dfarm.username=${username}`]),
             ...proxyArgs.map((a) => Argument.from([a])),
           ],
         },
@@ -255,7 +258,23 @@ export function enqueueRegistration(username: string, password: string): Promise
 
       const startedAt = Date.now();
       const outputLines: string[] = [];
-      const minecraft = launcher.launch(JAVA_PATH);
+      // Windows-антивирус/Defender иногда не пускает spawn второго клиента (EPERM) —
+      // повторяем со ступенчатой паузой, иначе параллельный пакет рушится на старте
+      let minecraft!: ChildProcess;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          minecraft = launcher.launch(JAVA_PATH);
+          break;
+        } catch (err: unknown) {
+          const code = (err as { code?: string })?.code;
+          if ((code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') && attempt < 5) {
+            logError(`[Queue] Не удалось запустить клиента (${code}), повтор ${attempt}/5 через ${attempt * 2}с...`);
+            await new Promise((r) => setTimeout(r, attempt * 2000));
+            continue;
+          }
+          throw err;
+        }
+      }
 
       const result = await new Promise<RegistrationResult>((resolve) => {
         let settled = false;

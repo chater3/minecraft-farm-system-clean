@@ -41,6 +41,12 @@ export function getStats() {
 }
 
 export function exportToTxt(): string {
-  const rows = db.prepare("SELECT username, password FROM accounts WHERE status = 'SUCCESS'").all() as { username: string; password: string }[];
-  return rows.map(r => `${r.username}:${r.password}`).join('\n');
+  const rows = db.prepare("SELECT username, password FROM accounts WHERE status = 'SUCCESS'").all() as { username: string; password: string | null }[];
+  return rows.map(r => `${r.username}:${r.password ?? ''}`).join('\n');
+}
+
+/** Все аккаунты: ник:пароль:статус — полный инвентарь для отчёта/повтора */
+export function exportAllToTxt(): string {
+  const rows = db.prepare('SELECT username, password, status FROM accounts').all() as { username: string; password: string | null; status: string }[];
+  return rows.map(r => `${r.username}:${r.password ?? ''}:${r.status}`).join('\n');
 }

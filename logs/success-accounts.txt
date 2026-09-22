@@ -1,0 +1,13 @@
+ChaterScript_6860:2012i10i20
+ChaterScript_3520:2012i10i20
+ChaterScript_4792:2012i10i20
+ChaterScript_7308:2012i10i20
+AutoTestSolo1:AutoPass123
+AutoTestSolo6:AutoPass123
+AutoTestSolo8:AutoPass123
+AutoTestSolo9:AutoPass123
+AutoBatchA:AutoPass123
+AutoBatchC:AutoPass123
+AutoBatchD:AutoPass123
+AutoBatchE:AutoPass123
+AutoBatchF:AutoPass123
