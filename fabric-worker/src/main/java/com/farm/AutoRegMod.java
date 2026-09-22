@@ -100,6 +100,23 @@ public class AutoRegMod implements ClientModInitializer {
                 requestShot("wrong" + wrongAttempts);
             } else if (text.contains("Зарегистрируйтесь")) {
                 System.out.println("[FarmWorker] SRV REG_PROMPT (state=" + state + ")");
+                // Сервер НЕ запрашивал капчу (BotFilter пропустил этот IP) — сразу
+                // регистрируемся, иначе мод виснет в WAIT_WALL, пока сервер повторяет
+                // «Зарегистрируйтесь», и аккаунт уходит в пустоту (инцидент Punctual_Mesa)
+                if (state == State.WAIT_WALL) {
+                    MinecraftClient.getInstance().execute(() -> {
+                        var p = MinecraftClient.getInstance().player;
+                        if (p == null) return;
+                        String pass = System.getProperty("farm.password", "FallbackPass123");
+                        p.networkHandler.sendChatCommand("reg " + pass);
+                        long now = System.currentTimeMillis();
+                        regSentAt = now + 8000;
+                        regStartAt = now;
+                        state = State.SENT_REG;
+                        System.out.println("[FarmWorker] STATE REG_SEND (капча не запрашивалась) /reg " + pass);
+                    });
+                    return;
+                }
                 // после нашей команды сервер переспрашивает → повторяем /reg <Пароль>
                 if (state == State.SENT_REG && regReprompt < 2) {
                     regReprompt++;

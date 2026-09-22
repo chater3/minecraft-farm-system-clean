@@ -111,6 +111,7 @@ export function initProxies(): Promise<number> {
   return Promise.all(all.map(async (p) => ({ p, alive: await tcpAlive(p.host, p.port) }))).then(
     (results) => {
       proxies = results.filter((r) => r.alive).map((r) => r.p);
+      loadCaps(); // капы с диска — чтобы рестарт не жалился в исчерпанные IP
       const dead = results.length - proxies.length;
       if (dead > 0) {
         logError(`[Proxy] Мёртвых (TCP refused/timeout): ${dead} из ${results.length}.`);
@@ -136,35 +137,102 @@ export type ProxyAssignment = {
 
 /**
  * Прокси, чей IP уперся в лимит аккаунтов FunTime («максимальное количество
- * аккаунтов») — больше не выдаём до конца сессии, иначе пачка тратит слоты
- * впустую на заведомо обречённые IP.
+ * аккаунтов») — не выдаём некоторое время, иначе пачка тратит слоты впустую
+ * на заведомо обречённые IP. Лимит на сервере со временем снимается, поэтому
+ * кап снимается автоматически через PROXY_UNCAP_MS (по умолчанию 1 час).
  */
-const capped = new Set<string>();
+const capped = new Map<string, number>();
+const UNCAP_MS = parseInt(process.env.PROXY_UNCAP_MS || '3600000', 10);
+/** Капы храним на диске: бот перезапускают, тесты идут отдельными процессами —
+ *  без файла каждый старт заново жалится в уже исчерпанные IP (инцидент 2026-09-22). */
+const CAP_FILE = path.resolve(__dirname, '../../../proxy/capped.txt');
+
+function saveCaps(): void {
+  try {
+    const body = [...capped].map(([key, at]) => `${key} ${at}`).join('\n');
+    fs.writeFileSync(CAP_FILE, body ? body + '\n' : '', 'utf8');
+  } catch (error) {
+    logError('[Proxy] Не удалось записать capped.txt:', error);
+  }
+}
+
+function loadCaps(): void {
+  try {
+    const now = Date.now();
+    let stale = 0;
+    for (const line of fs.readFileSync(CAP_FILE, 'utf8').split(/\r?\n/)) {
+      const m = line.trim().match(/^(\S+)\s+(\d+)$/);
+      if (!m) continue;
+      const at = Number(m[2]);
+      const ip = m[1].split(':')[0]; // в файле могли лежать старые ключи host:port:user
+      if (now - at < UNCAP_MS) capped.set(ip, at);
+      else stale++;
+    }
+    if (capped.size > 0 || stale > 0) {
+      log(`[Proxy] Капы из capped.txt: активных ${capped.size}, истёвших снято ${stale}`);
+    }
+  } catch {
+    /* файла ещё нет — ок */
+  }
+}
+
+/** Снять устаревшие капы (вызывается при выдаче слота) */
+function releaseExpiredCaps(): void {
+  if (capped.size === 0) return;
+  const now = Date.now();
+  let removed = false;
+  for (const [key, at] of capped) {
+    if (now - at >= UNCAP_MS) {
+      capped.delete(key);
+      removed = true;
+      log(`[Proxy] Лимит IP истёк — ${key} снова в ротации`);
+    }
+  }
+  if (removed) saveCaps();
+}
+
+/** Сводка по пулу для /stats */
+export function getProxyStats(): { total: number; free: number; capped: number } {
+  releaseExpiredCaps();
+  return { total: proxies.length, free: proxies.filter((p) => !capped.has(ipOf(p))).length, capped: capped.size };
+}
 
 function proxyKey(p: ProxyEntry): string {
   return `${p.host}:${p.port}:${p.user}`;
 }
 
+/** Лимит FunTime считается по исходящему IP — капаем по IP, а не по логину прокси:
+ *  один и тот же IP приходит с разными user:port и без этой нормализации
+ *  продавался в ротацию заново и снова упирался в «максимальное количество аккаунтов». */
+function ipOf(keyOrEntry: string | ProxyEntry): string {
+  const s = typeof keyOrEntry === 'string' ? keyOrEntry : keyOrEntry.host;
+  return s.split(':')[0];
+}
+
 /** Пометить прокси исчерпанным (вызывается из taskManager по сообщению сервера) */
 export function capProxy(key: string): void {
-  if (!key || capped.has(key)) return;
-  capped.add(key);
-  const free = proxies.filter((p) => !capped.has(proxyKey(p))).length;
+  if (!key) return;
+  const ip = ipOf(key);
+  if (capped.has(ip)) return;
+  capped.set(ip, Date.now());
+  saveCaps();
+  const free = proxies.filter((p) => !capped.has(ipOf(p))).length;
   logError(
-    `[Proxy] ${key} исчерпал лимит аккаунтов на IP — исключён из ротации (свободных: ${free}/${proxies.length})`,
+    `[Proxy] ${key} исчерпал лимит аккаунтов на IP ${ip} — исключён на ${Math.round(UNCAP_MS / 60000)} мин (свободных: ${free}/${proxies.length})`,
   );
   if (free === 0) {
-    logError('[Proxy] ВСЕ прокси исчерпали лимит! Обновите proxy/proxies.txt — регистрации будут падать.');
+    logError('[Proxy] ВСЕ прокси исчерпали лимит! Добавьте свежие в proxy/proxies.txt — сейчас будем переиспользовать капнутые.');
   }
 }
 
 export function nextProxyAssignment(label: string): ProxyAssignment {
   if (proxies.length === 0) return { socksArgs: [], gameAddress: null, proxyKey: '' };
+  releaseExpiredCaps();
   // ищем ближайший НЕзабитый слот (капнутые прокси пропускаем)
   let idx = -1;
   for (let i = 0; i < proxies.length; i++) {
     const cand = (cursor + i) % proxies.length;
-    if (!capped.has(proxyKey(proxies[cand]))) {
+    if (!capped.has(ipOf(proxies[cand]))) {
       idx = cand;
       break;
     }

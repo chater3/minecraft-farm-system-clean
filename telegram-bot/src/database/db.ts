@@ -47,6 +47,33 @@ export function getStatus(username: string): string | null {
   return row?.status ?? null;
 }
 
+/**
+ * Починка статусов: ник с подтверждённой регистрацией в логах (REG_OK), но со
+ * статусом FAILED (раньше кик после /reg считался провалом) → SUCCESS.
+ * Возвращает число исправленных строк.
+ */
+export function promoteToSuccess(usernames: string[]): number {
+  if (usernames.length === 0) return 0;
+  const stmt = db.prepare(
+    "UPDATE accounts SET status = 'SUCCESS' WHERE status = 'FAILED' AND username = ?",
+  );
+  let changed = 0;
+  const run = db.transaction((list: string[]) => {
+    for (const u of list) changed += stmt.run(u).changes;
+  });
+  run(usernames);
+  return changed;
+}
+
+/** Никуи с указанным статусом (например, застрявшие PENDING) */
+export function getUsernamesByStatus(status: string): string[] {
+  return (
+    db.prepare('SELECT username FROM accounts WHERE status = ?').all(status) as {
+      username: string;
+    }[]
+  ).map((r) => r.username);
+}
+
 export function getStats() {
   const total = (db.prepare('SELECT COUNT(*) as count FROM accounts').get() as { count: number }).count;
   const success = (db.prepare("SELECT COUNT(*) as count FROM accounts WHERE status = 'SUCCESS'").get() as { count: number }).count;
