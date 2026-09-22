@@ -150,26 +150,61 @@ export function nextProxyAssignment(label: string): ProxyAssignment {
 
 /* ---------------- SOCKS5 → HTTP CONNECT мост ---------------- */
 
+const BIND_RETRIES = 15;
+const BIND_RETRY_MS = 2000;
+
+/**
+ * listen с повтором при EADDRINUSE: если бот перезапускают, пока старый
+ * экземпляр ещё держит порты мостов, новый подождёт и захватит их сам,
+ * вместо вечной смерти моста (случалось при двух npm start).
+ */
+function bindWithRetry(
+  factory: () => net.Server,
+  port: number,
+  successLog: string,
+  what: string,
+  attempt = 0,
+): void {
+  const server = factory();
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && !server.listening && attempt < BIND_RETRIES) {
+      log(
+        `[Proxy] ${what} 127.0.0.1:${port} занят другим процессом — повтор ${attempt + 1}/${BIND_RETRIES} через ${BIND_RETRY_MS / 1000}с...`,
+      );
+      setTimeout(
+        () => bindWithRetry(factory, port, successLog, what, attempt + 1),
+        BIND_RETRY_MS,
+      );
+      return;
+    }
+    logError(`[Proxy] Ошибка ${what} 127.0.0.1:${port}:`, err);
+  });
+  server.listen(port, '127.0.0.1', () => {
+    log(`[Proxy] ${successLog}`);
+  });
+  servers.push(server);
+}
+
 export function startBridge(): boolean {
   if (!bridgeStarted && proxies.length > 0) {
     proxies.forEach((p, i) => {
       const port = BRIDGE_BASE_PORT + i;
-      const server = net.createServer((sock) => handleSocksClient(sock, p));
-      server.on('error', (err) => logError(`[Proxy] Ошибка моста 127.0.0.1:${port}:`, err));
-      server.listen(port, '127.0.0.1', () => {
-        log(`[Proxy] SOCKS5 мост 127.0.0.1:${port} → HTTP ${p.host}:${p.port}`);
-      });
-      servers.push(server);
+      bindWithRetry(
+        () => net.createServer((sock) => handleSocksClient(sock, p)),
+        port,
+        `SOCKS5 мост 127.0.0.1:${port} → HTTP ${p.host}:${p.port}`,
+        'моста',
+      );
     });
     // игровой TCP-туннель: 127.0.0.1:22081+i → CONNECT mc.funtime.su:25565 через прокси
     proxies.forEach((p, i) => {
       const port = GAME_BASE_PORT + i;
-      const server = net.createServer((sock) => handleGameClient(sock, p));
-      server.on('error', (err) => logError(`[Proxy] Ошибка игрового туннеля 127.0.0.1:${port}:`, err));
-      server.listen(port, '127.0.0.1', () => {
-        log(`[Proxy] Игровой туннель 127.0.0.1:${port} → CONNECT ${GAME_HOST}:${GAME_PORT} через ${p.host}:${p.port}`);
-      });
-      servers.push(server);
+      bindWithRetry(
+        () => net.createServer((sock) => handleGameClient(sock, p)),
+        port,
+        `Игровой туннель 127.0.0.1:${port} → CONNECT ${GAME_HOST}:${GAME_PORT} через ${p.host}:${p.port}`,
+        'игрового туннеля',
+      );
     });
     bridgeStarted = true;
   }
