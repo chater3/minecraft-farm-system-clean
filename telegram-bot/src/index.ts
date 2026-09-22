@@ -225,9 +225,19 @@ bot.command('reg', async (ctx) => {
 
 bootstrap()
   .then(() => {
-    bot.start();
     log('[+] Telegram Bot запущен и готов к работе!');
     log('[+] Команды: /run /reg /stats /export /exportall');
+    bot.start().catch((err) => {
+      if (String(err).includes('409')) {
+        logError(
+          '[Bot] Конфликт getUpdates (409): уже запущен другой экземпляр бота. ' +
+            'Оставьте только один npm start — этот закрыт.',
+        );
+      } else {
+        logError('[Bot] Поллинг остановлен:', err);
+      }
+      process.exit(1);
+    });
   })
   .catch((err) => {
     logError('Фатальная ошибка бота:', err);
