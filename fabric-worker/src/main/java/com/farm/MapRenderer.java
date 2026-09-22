@@ -9,16 +9,14 @@ import java.io.IOException;
 
 public class MapRenderer {
 
-    public static File saveMapToFile(MapState mapState, String filename) throws IOException {
-        // Карта в Майнкрафте всегда имеет размер 128x128 пикселей
+    /** Рендер одной карты 128x128 из MapState. */
+    public static BufferedImage render(MapState mapState) {
         BufferedImage image = new BufferedImage(128, 128, BufferedImage.TYPE_INT_RGB);
 
-        // Массив colors хранит 16384 байта (128 * 128)
         for (int i = 0; i < 16384; i++) {
             int x = i % 128;
             int y = i / 128;
 
-            // Базовый алгоритм декодирования цвета карты Minecraft
             int colorByte = mapState.colors[i] & 255;
             int colorId = colorByte / 4;
             int brightness = colorByte & 3;
@@ -28,9 +26,16 @@ public class MapRenderer {
 
             image.setRGB(x, y, rgb);
         }
+        return image;
+    }
 
+    public static File saveImage(BufferedImage image, String filename) throws IOException {
         File outputFile = new File(filename);
         ImageIO.write(image, "png", outputFile);
         return outputFile;
+    }
+
+    public static File saveMapToFile(MapState mapState, String filename) throws IOException {
+        return saveImage(render(mapState), filename);
     }
 }

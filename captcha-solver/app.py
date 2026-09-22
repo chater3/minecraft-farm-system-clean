@@ -1,6 +1,7 @@
 import os
 import logging
 import uuid
+from collections import Counter
 from PIL import Image
 from flask import Flask, request, jsonify
 
@@ -37,13 +38,16 @@ logger.info(f"Модель успешно загружена: {MODEL_PATH}")
 #                        ФУНКЦИЯ ОБРАБОТКИ КАПЧИ
 # ================================================================
 
-def process_captcha(image_path):
-    confidence_thresholds = [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.25]
+confidence_thresholds = [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.25]
 
+
+def _predict(image_path, imgsz):
+    """Одна попытка распознавания на заданном размере входа."""
+    all_boxes = []
     for conf in confidence_thresholds:
         results = model.predict(
             source=image_path,
-            imgsz=640,
+            imgsz=imgsz,
             conf=conf,
             iou=0.4,
             verbose=False
@@ -60,16 +64,35 @@ def process_captcha(image_path):
             top_5.sort(key=lambda x: x[0])
 
             captcha_text = "".join(model.names[int(box[5])] for box in top_5)
-            logger.info(f"Успешно распознано (conf={conf}): {captcha_text}")
+            logger.info(f"Распознано (imgsz={imgsz}, conf={conf}): {captcha_text}")
             return captcha_text
 
     if all_boxes:
         all_boxes.sort(key=lambda x: x[0])
         captcha_text = "".join(model.names[int(box[5])] for box in all_boxes)
-        logger.info(f"Распознано частично: {captcha_text}")
+        logger.info(f"Распознано частично (imgsz={imgsz}): {captcha_text}")
         return captcha_text
 
     return ""
+
+
+def process_captcha(image_path):
+    """Мультимасштабное голосование: гадаем на 640/960/1280 и берём большинство.
+    При равенстве побеждает первый увиденный ответ (640 — как в обучении)."""
+    texts = []
+    for imgsz in (640, 960, 1280):
+        t = _predict(image_path, imgsz)
+        if t:
+            texts.append(t)
+
+    if not texts:
+        return ""
+
+    counts = Counter(texts)
+    best = max(counts.items(), key=lambda kv: kv[1])[0]
+    if len(counts) > 1:
+        logger.warning(f"Голосование разошлось: {texts} -> {best}")
+    return best
 
 # ================================================================
 #                           ЭНДПОИНТ SOLVE

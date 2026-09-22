@@ -27,6 +27,11 @@ export function updateStatus(username: string, status: 'SUCCESS' | 'FAILED' | 'I
   return stmt.run(status, username);
 }
 
+/** Зависшие IN_PROGRESS (после падения процесса) помечаем FAILED */
+export function resetInProgress() {
+  return db.prepare("UPDATE accounts SET status = 'FAILED' WHERE status = 'IN_PROGRESS'").run();
+}
+
 export function getStats() {
   const total = (db.prepare('SELECT COUNT(*) as count FROM accounts').get() as { count: number }).count;
   const success = (db.prepare("SELECT COUNT(*) as count FROM accounts WHERE status = 'SUCCESS'").get() as { count: number }).count;
