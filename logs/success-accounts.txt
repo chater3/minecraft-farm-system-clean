@@ -12,3 +12,8 @@ AutoBatchD:AutoPass123
 AutoBatchE:AutoPass123
 AutoBatchF:AutoPass123
 Auto_3351:AutoPass123
+NobleEmberline:AutoPass123
+Silver_Comet:AutoPass123
+ThornyZephyr87:AutoPass123
+BraveBreeze:AutoPass123
+blessedquiver83:AutoPass123
