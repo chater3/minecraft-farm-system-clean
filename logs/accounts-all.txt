@@ -133,3 +133,9 @@ crypticthistle55:AutoPass123:SUCCESS
 CascadeQuick:AutoPass123:SUCCESS
 EmberlineUmber:AutoPass123:SUCCESS
 ReefMighty68:AutoPass123:SUCCESS
+WittyMarsh:AutoPass123:FAILED
+Ghost523:AutoPass123:FAILED
+AtlasChrome:AutoPass123:FAILED
+IcyQuill18:AutoPass123:IN_PROGRESS
+LunarThunder:AutoPass123:SUCCESS
+WildDawn:AutoPass123:FAILED

@@ -64,3 +64,4 @@ crypticthistle55:AutoPass123
 CascadeQuick:AutoPass123
 EmberlineUmber:AutoPass123
 ReefMighty68:AutoPass123
+LunarThunder:AutoPass123
