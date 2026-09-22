@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "reg": "tsx src/cli.ts",
+    "nicks": "tsx src/nicks.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
