@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 /** Каталог с логами: <корень проекта>/logs */
-const LOG_DIR = path.resolve(__dirname, '../../logs');
+export const LOG_DIR = path.resolve(__dirname, '../../logs');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
 /** Общий лог всех запусков */

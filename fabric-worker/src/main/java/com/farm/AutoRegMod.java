@@ -8,7 +8,7 @@ import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.DisplayEntity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
-import net.minecraft.util.Direction;
+import net.minecraft.util.math.Direction;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.component.DataComponentTypes;
@@ -43,6 +43,9 @@ public class AutoRegMod implements ClientModInitializer {
     private volatile boolean passSeen = false;
     private volatile int solveAttempts = 0;
     private volatile int wrongAttempts = 0;
+    private volatile int regReprompt = 0;
+    private volatile boolean regConfirmed = false;
+    private volatile long regStartAt = 0;
     private volatile long digitsSentAt = 0;
     private volatile long regSentAt = 0;
 
@@ -92,8 +95,25 @@ public class AutoRegMod implements ClientModInitializer {
                 }
                 // на стене уже новая картинка — переснимаем и решаем заново
                 requestShot("wrong" + wrongAttempts);
+            } else if (text.contains("Зарегистрируйтесь")) {
+                System.out.println("[FarmWorker] SRV REG_PROMPT (state=" + state + ")");
+                // после нашей команды сервер переспрашивает → повторяем /reg <Пароль>
+                if (state == State.SENT_REG && regReprompt < 2) {
+                    regReprompt++;
+                    MinecraftClient.getInstance().execute(() -> {
+                        var p = MinecraftClient.getInstance().player;
+                        if (p == null) return;
+                        String pass = System.getProperty("farm.password", "FallbackPass123");
+                        p.networkHandler.sendChatCommand("reg " + pass);
+                        regSentAt = System.currentTimeMillis() + 8000;
+                        System.out.println("[FarmWorker] REG_RESEND #" + regReprompt + " /reg " + pass);
+                    });
+                }
+            } else if (text.contains("спешная регистрация") || text.contains("Добро пожаловать")) {
+                regConfirmed = true;
+                System.out.println("[FarmWorker] STATE REG_OK: " + text.trim());
             } else if (text.toLowerCase().contains("егистр")) {
-                System.out.println("[FarmWorker] STATE REG_CONFIRM");
+                System.out.println("[FarmWorker] STATE REG_CONFIRM: " + text);
             }
         });
 
@@ -152,10 +172,12 @@ public class AutoRegMod implements ClientModInitializer {
                     long now = System.currentTimeMillis();
                     if (passSeen) {
                         String pass = System.getProperty("farm.password", "FallbackPass123");
-                        String cmd = "reg " + pass + " " + pass;
+                        // сервер: "/reg <Пароль>" — ровно ОДИН аргумент
+                        String cmd = "reg " + pass;
                         System.out.println("[FarmWorker] STATE REG_SEND /" + cmd);
                         client.player.networkHandler.sendChatCommand(cmd);
                         regSentAt = now + 8000;
+                        regStartAt = now;
                         state = State.SENT_REG;
                     } else if (digitsSentAt > 0 && now > digitsSentAt + 25000) {
                         System.out.println("[FarmWorker] STATE EXIT 4: BotFilter не подтвердил прохождение за 25с");
@@ -163,9 +185,14 @@ public class AutoRegMod implements ClientModInitializer {
                     }
                 }
                 case SENT_REG -> {
-                    if (System.currentTimeMillis() >= regSentAt) {
-                        System.out.println("[FarmWorker] STATE EXIT 0: PASS_OK, регистрация отправлена");
+                    long now = System.currentTimeMillis();
+                    if (regConfirmed) {
+                        System.out.println("[FarmWorker] STATE EXIT 0: регистрация подтверждена сервером");
                         System.exit(0);
+                    }
+                    if (now > regSentAt && now - regStartAt > 25000) {
+                        System.out.println("[FarmWorker] STATE EXIT 3: сервер не подтвердил регистрацию за 25с");
+                        System.exit(3);
                     }
                 }
             }
@@ -213,7 +240,7 @@ public class AutoRegMod implements ClientModInitializer {
             if (e instanceof ItemFrameEntity frame) {
                 // берём только рамки, чья лицевая сторона смотрёт НА игрока —
                 // иначе в bbox попадут боковые/задние стенки
-                Direction nv = frame.getFacing();
+                var nv = frame.getFacing().getVector();
                 double faceDot = nv.getX() * fx + nv.getY() * fy + nv.getZ() * fz;
                 if (faceDot > -0.5) { excluded++; continue; }
                 framePts.add(new double[]{l, e.getY() - ey, f});

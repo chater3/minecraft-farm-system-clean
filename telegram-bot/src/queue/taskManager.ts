@@ -13,7 +13,7 @@ import {
   type IMVersion,
 } from 'minecraft-launcher-lib';
 import { updateStatus } from '../database/db';
-import { log, logError } from '../logger';
+import { log, logError, LOG_DIR } from '../logger';
 import { nextProxyJvmArgs } from '../proxy/proxyBridge';
 import 'dotenv/config';
 
@@ -138,7 +138,7 @@ const FAILURE_MARKERS = [
   'STATE EXIT 7',
 ];
 
-const SUCCESS_MARKERS = ['STATE EXIT 0', 'Проверка пройдена'];
+const SUCCESS_MARKERS = ['STATE EXIT 0', 'Успешная регистрация'];
 
 function classifyOutput(lines: string[]): { ok: boolean; why: string } {
   const all = lines.join('\n');
@@ -160,7 +160,7 @@ function classifyOutput(lines: string[]): { ok: boolean; why: string } {
 /** Скриншоты клиента (F2-режим мода) за время задачи копируем в logs/screenshots */
 function collectScreenshots(username: string, startedAt: number): string[] {
   const src = join(GAME_DIR, 'screenshots');
-  const dst = join(process.cwd(), 'logs', 'screenshots');
+  const dst = join(LOG_DIR, 'screenshots');
   const copied: string[] = [];
   try {
     if (!fs.existsSync(src)) {
@@ -169,7 +169,10 @@ function collectScreenshots(username: string, startedAt: number): string[] {
     }
     fs.mkdirSync(dst, { recursive: true });
     for (const name of fs.readdirSync(src)) {
-      if (!name.toLowerCase().endsWith('.png')) continue;
+      // мод пишет файлы БЕЗ расширения (autoreg_wall_<ts>), поэтому пропускаем
+      // только явно не-изображения (точка есть, но это не картинка)
+      const lower = name.toLowerCase();
+      if (lower.includes('.') && !/\.(png|jpe?g|webp)$/.test(lower)) continue;
       const file = join(src, name);
       try {
         const stat = fs.statSync(file);
