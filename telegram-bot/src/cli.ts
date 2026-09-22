@@ -9,18 +9,19 @@
  */
 import 'dotenv/config';
 import http from 'http';
-import fs from 'fs';
-import { join } from 'path';
 import readline from 'readline/promises';
-import { addAccount, getStats, resetInProgress, exportToTxt, exportAllToTxt } from './database/db';
+import { addAccount, getStats, resetInProgress, getKnownUsernames } from './database/db';
 import { enqueueRegistration, type RegistrationResult } from './queue/taskManager';
-import { log, logError, createRunLog, getRunLog, LOG_DIR } from './logger';
+import { log, logError, createRunLog, getRunLog } from './logger';
 import { initProxies, startBridge, stopBridge } from './proxy/proxyBridge';
+import { generateNicknames } from './nickname';
+import { saveAccountFiles } from './export';
 
 interface Options {
   users: string[];
   password: string;
-  prefix: string;
+  /** Явный префикс (--prefix) — только по просьбе; по умолчанию ники случайные */
+  prefix: string | null;
   count: number;
   skipSolverCheck: boolean;
   timeoutMs: number;
@@ -30,7 +31,7 @@ function parseArgs(argv: string[]): Options {
   const opts: Options = {
     users: [],
     password: process.env.DEFAULT_REG_PASSWORD || 'AutoPass123',
-    prefix: process.env.AUTO_NICK_PREFIX || 'Auto',
+    prefix: null,
     count: 0,
     skipSolverCheck: false,
     timeoutMs: parseInt(process.env.RUN_TIMEOUT_MS || '900000', 10),
@@ -52,8 +53,6 @@ function parseArgs(argv: string[]): Options {
         break;
       case '--count':
       case '-c': {
-        // количество считаем ТОЛЬКО здесь, а генерируем ники в main() —
-        // иначе --prefix после --count не применялся к случайным никам
         const n = parseInt(argv[++i] || '1', 10);
         opts.count = Number.isNaN(n) || n < 1 ? 1 : n;
         break;
@@ -87,7 +86,8 @@ function printHelp() {
   log(
     'Использование: npm run reg [--count <N>] [--user <ник>] [--pass <пароль>] [--prefix <префикс>] [--skip-solver-check] [--timeout <мс>]',
   );
-  log('  --count N       — сразу N случайных ников (префикс из --prefix).');
+  log('  --count N       — сразу N случайных уникальных ников (без общей приставки).');
+  log('  --prefix X      — навязать префикс (по умолчанию ники полностью случайные).');
   log('  Без ников и --count в терминале — спросит, сколько аккаунтов запустить.');
 }
 
@@ -110,19 +110,29 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   // --- выбор количества аккаунтов ---
-  const usedNicks = new Set(opts.users);
+  // Ники случайные и каждый раз разные (без общей приставки); уникальность
+  // проверяется и по БД (getKnownUsernames), и внутри пачки.
   const addRandomNicks = (n: number) => {
-    for (let i = 0; i < n; i++) {
-      let nick = '';
-      do {
-        nick = `${opts.prefix}_${Math.floor(1000 + Math.random() * 9000)}`;
-      } while (usedNicks.has(nick)); // не даём совпасть случайным никам
-      usedNicks.add(nick);
-      opts.users.push(nick);
-    }
+    const fresh = generateNicknames(n, [...getKnownUsernames(), ...opts.users]);
+    opts.users.push(...fresh);
   };
 
-  if (opts.count > 0) addRandomNicks(opts.count);
+  if (opts.count > 0) {
+    if (opts.prefix) {
+      // явный --prefix: прежняя схема Префикс_XXXX
+      const used = new Set([...getKnownUsernames(), ...opts.users]);
+      for (let i = 0; i < opts.count; i++) {
+        let nick = '';
+        do {
+          nick = `${opts.prefix}_${Math.floor(1000 + Math.random() * 9000)}`;
+        } while (used.has(nick));
+        used.add(nick);
+        opts.users.push(nick);
+      }
+    } else {
+      addRandomNicks(opts.count);
+    }
+  }
 
   if (opts.users.length === 0) {
     // ни --count, ни --user: в терминале спрашиваем, иначе 1 ник (как раньше)
@@ -137,7 +147,7 @@ async function main() {
       }
     }
     addRandomNicks(count);
-    log(`[CLI] Сгенерировано ников: ${count} (префикс ${opts.prefix})`);
+    log(`[CLI] Сгенерировано ников: ${count} (случайные, без общей приставки)`);
   }
 
   // дедупликация ников (БД помечает UNIQUE через INSERT OR IGNORE)
@@ -213,11 +223,7 @@ async function main() {
 
   // ник + пароль — текстовыми файлами, чтобы не лезть в SQLite
   try {
-    const successFile = join(LOG_DIR, 'success-accounts.txt');
-    const allFile = join(LOG_DIR, 'accounts-all.txt');
-    const successData = exportToTxt();
-    fs.writeFileSync(successFile, successData ? successData + '\n' : '', 'utf8');
-    fs.writeFileSync(allFile, (exportAllToTxt() || '') + '\n', 'utf8');
+    const { successFile, allFile } = saveAccountFiles();
     log(`[CLI] Ник+пароль сохранены: ${successFile} (успешных: ${stats.success})`);
     log(`[CLI] Полный список: ${allFile} (ник:пароль:статус, всего ${stats.total})`);
   } catch (err) {

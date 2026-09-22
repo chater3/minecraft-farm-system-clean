@@ -32,6 +32,21 @@ export function resetInProgress() {
   return db.prepare("UPDATE accounts SET status = 'FAILED' WHERE status = 'IN_PROGRESS'").run();
 }
 
+/** Все известные ники — для генератора случайных ников (никогда не повторять) */
+export function getKnownUsernames(): string[] {
+  return (db.prepare('SELECT username FROM accounts').all() as { username: string }[]).map(
+    (r) => r.username,
+  );
+}
+
+/** Текущий статус ника или null, если ника в базе нет */
+export function getStatus(username: string): string | null {
+  const row = db.prepare('SELECT status FROM accounts WHERE username = ?').get(username) as
+    | { status: string }
+    | undefined;
+  return row?.status ?? null;
+}
+
 export function getStats() {
   const total = (db.prepare('SELECT COUNT(*) as count FROM accounts').get() as { count: number }).count;
   const success = (db.prepare("SELECT COUNT(*) as count FROM accounts WHERE status = 'SUCCESS'").get() as { count: number }).count;
