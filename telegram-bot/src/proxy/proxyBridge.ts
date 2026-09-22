@@ -1,5 +1,6 @@
 import fs from 'fs';
 import net from 'net';
+import path from 'path';
 import { log, logError } from '../logger';
 
 /**
@@ -20,6 +21,8 @@ export type ProxyEntry = {
 };
 
 const DEFAULT_FILES = [
+  // главный файл проекта — сюда докидывайте новые прокси
+  path.resolve(__dirname, '../../../proxy/proxies.txt'),
   'C:\\Users\\User\\Downloads\\Webshare 10 proxies.txt',
   'C:\\Users\\User\\Downloads\\Webshare 10 proxies (другой ак).txt',
 ];
