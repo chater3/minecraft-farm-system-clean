@@ -14,7 +14,7 @@ import {
 } from 'minecraft-launcher-lib';
 import { updateStatus } from '../database/db';
 import { log, logError, LOG_DIR } from '../logger';
-import { nextProxyAssignment } from '../proxy/proxyBridge';
+import { nextProxyAssignment, capProxy } from '../proxy/proxyBridge';
 import 'dotenv/config';
 
 const concurrencyLimit = parseInt(process.env.MAX_CONCURRENT_WORKERS || '1', 10);
@@ -137,6 +137,8 @@ const FAILURE_MARKERS = [
   'STATE EXIT 5',
   'STATE EXIT 6',
   'STATE EXIT 7',
+  'STATE EXIT 8',
+  'STATE EXIT 9',
 ];
 
 const SUCCESS_MARKERS = ['STATE EXIT 0', 'Успешная регистрация'];
@@ -201,8 +203,12 @@ function forceKill(child: ChildProcess) {
   });
 }
 
-export function enqueueRegistration(username: string, password: string): Promise<RegistrationResult> {
-  return queue.add(async (): Promise<RegistrationResult> => {
+export function enqueueRegistration(
+  username: string,
+  password: string,
+  attempt = 0,
+): Promise<RegistrationResult> {
+  return (queue.add(async (): Promise<RegistrationResult> => {
     log(`[Queue] Старт задачи для аккаунта: ${username}`);
     updateStatus(username, 'IN_PROGRESS');
 
@@ -300,6 +306,10 @@ export function enqueueRegistration(username: string, password: string): Promise
           const text = chunk.toString().trimEnd();
           if (!text) return;
           outputLines.push(text);
+          // сервер ограничил IP этого прокси — исключаем из ротации немедленно
+          if (proxy.proxyKey && text.toLowerCase().includes('максимальное количество аккаунтов')) {
+            capProxy(proxy.proxyKey);
+          }
           log(`[Minecraft ${username}]: ${text}`);
         };
 
@@ -346,7 +356,20 @@ export function enqueueRegistration(username: string, password: string): Promise
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
-  }) as Promise<RegistrationResult>;
+  }) as Promise<RegistrationResult>).then(async (result) => {
+    // Одиночный повтор: EXIT 3/4 означает, что аккаунт на сервере НЕ создан
+    // (кик/таймаут BotFilter/подтверждения) — повтор с новым прокси безопасен
+    // и превращает падение пачки в успех. Лимит IP (EXIT 8) не повторяем.
+    const retryable =
+      result.status === 'FAILED' &&
+      (result.detail.includes('STATE EXIT 3') || result.detail.includes('STATE EXIT 4'));
+    if (retryable && attempt < 1) {
+      log(`[Queue] Повтор 2/2 для ${username}: ${result.detail}`);
+      await new Promise((r) => setTimeout(r, 1500));
+      return enqueueRegistration(username, password, attempt + 1);
+    }
+    return result;
+  });
 }
 
 /** Дождаться завершения всех задач в очереди */
