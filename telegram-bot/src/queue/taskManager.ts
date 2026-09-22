@@ -321,16 +321,18 @@ export function enqueueRegistration(username: string, password: string): Promise
           log(`[Queue] Процесс для ${username} завершился с кодом ${code}`);
 
           const verdict = classifyOutput(outputLines);
+          // скриншоты мод дописывает ДО выхода из процесса — хватает 0.7с,
+          // старые 3с были чистой мёртвой паузой между аккаунтами
           if (verdict.ok) {
             updateStatus(username, 'SUCCESS');
             log(`[Queue] Аккаунт ${username}: ${verdict.why} ✅`);
-            setTimeout(() => finish('SUCCESS', verdict.why), 3000);
+            setTimeout(() => finish('SUCCESS', verdict.why), 700);
           } else {
             updateStatus(username, 'FAILED');
             logError(
               `[Queue] Аккаунт ${username}: ${verdict.why} (exit code ${String(code)}). ❌`,
             );
-            setTimeout(() => finish('FAILED', `${verdict.why}; exit code ${String(code)}`), 3000);
+            setTimeout(() => finish('FAILED', `${verdict.why}; exit code ${String(code)}`), 700);
           }
         });
       });

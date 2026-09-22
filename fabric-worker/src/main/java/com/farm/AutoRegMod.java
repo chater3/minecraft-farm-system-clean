@@ -306,7 +306,7 @@ public class AutoRegMod implements ClientModInitializer {
         MinecraftClient c = MinecraftClient.getInstance();
         c.execute(() -> {
             pendingTag = tag;
-            hudWarmup = 4; // 4 × 5 тиков ≈ 1с — HUD гарантированно скрыт в буфере
+            hudWarmup = 2; // 2 × 5 тиков = 0.5с — HUD уже скрыт, кадров достаточно
             c.options.hudHidden = true;
             processing = false;
             firstSeenAt = 0;
@@ -529,7 +529,7 @@ public class AutoRegMod implements ClientModInitializer {
     /** Скриншот в game/screenshots (аналог F2). Только из рендертотока. */
     private void takeScreenshot(MinecraftClient client, String tag) {
         long now = System.currentTimeMillis();
-        if (now - lastShotAt < 1500) return;
+        if (now - lastShotAt < 700) return; // раньше 1500 — проскок кадра дорог
         lastShotAt = now;
         // префикс юзером: два клиента в общей папке screenshots не путают файлы
         String uname = System.getProperty("farm.username");
