@@ -1,49 +1,10 @@
-# Сюда докидывайте прокси — по одному в строку, формат:
-# ip:port:user:pass
+# Сюда кидайте свои прокси — по одному на строку.
+# Поддерживаемые форматы:
+#   ip:port
+#   ip:port:login:password
+#   login:password@ip:port
+#   socks5://ip:port
+# После добавления перезапустите бота или выполните /reload.
 #
-# Пример:
-# 31.59.20.176:6754:jnascuuh:0k6d5094dihq
-#
-# Строки с # и пустые строки игнорируются.
-# После добавления перезапустите бота (npm start) или CLI (npm run reg):
-# при старте каждый прокси проверяется на живость, мёртвые отсеиваются.
-31.59.20.176:6754:jmkbrdmd:0k6d5094dihq
-45.38.107.97:6014:jmkbrdmd:0k6d5094dihq
-198.105.121.200:6462:jmkbrdmd:0k6d5094dihq
-64.137.96.74:6641:jmkbrdmd:0k6d5094dihq
-198.23.243.226:6361:jmkbrdmd:0k6d5094dihq
-38.154.185.97:6370:jmkbrdmd:0k6d5094dihq
-84.247.60.125:6095:jmkbrdmd:0k6d5094dihq
-142.111.67.146:5611:jmkbrdmd:0k6d5094dihq
-191.96.254.138:6185:jmkbrdmd:0k6d5094dihq
-31.58.9.4:6077:jmkbrdmd:0k6d5094dihq
-31.59.20.176:6754:jnascuuh:zo3nbaiwn12c
-45.38.107.97:6014:jnascuuh:zo3nbaiwn12c
-198.105.121.200:6462:jnascuuh:zo3nbaiwn12c
-64.137.96.74:6641:jnascuuh:zo3nbaiwn12c
-198.23.243.226:6361:jnascuuh:zo3nbaiwn12c
-38.154.185.97:6370:jnascuuh:zo3nbaiwn12c
-84.247.60.125:6095:jnascuuh:zo3nbaiwn12c
-142.111.67.146:5611:jnascuuh:zo3nbaiwn12c
-191.96.254.138:6185:jnascuuh:zo3nbaiwn12c
-31.58.9.4:6077:jnascuuh:zo3nbaiwn12c
-31.59.20.176:6754:wfdvafpa:izvfvayximff
-45.38.107.97:6014:wfdvafpa:izvfvayximff
-198.105.121.200:6462:wfdvafpa:izvfvayximff
-64.137.96.74:6641:wfdvafpa:izvfvayximff
-198.23.243.226:6361:wfdvafpa:izvfvayximff
-38.154.185.97:6370:wfdvafpa:izvfvayximff
-84.247.60.125:6095:wfdvafpa:izvfvayximff
-142.111.67.146:5611:wfdvafpa:izvfvayximff
-191.96.254.138:6185:wfdvafpa:izvfvayximff
-31.58.9.4:6077:wfdvafpa:izvfvayximff
-31.59.20.176:6754:xyeszmln:a3e9rbvmy7z3
-45.38.107.97:6014:xyeszmln:a3e9rbvmy7z3
-198.105.121.200:6462:xyeszmln:a3e9rbvmy7z3
-64.137.96.74:6641:xyeszmln:a3e9rbvmy7z3
-198.23.243.226:6361:xyeszmln:a3e9rbvmy7z3
-38.154.185.97:6370:xyeszmln:a3e9rbvmy7z3
-84.247.60.125:6095:xyeszmln:a3e9rbvmy7z3
-142.111.67.146:5611:xyeszmln:a3e9rbvmy7z3
-191.96.254.138:6185:xyeszmln:a3e9rbvmy7z3
-31.58.9.4:6077:xyeszmln:a3e9rbvmy7z3
+# Пример (замените на свои):
+# 1.2.3.4:8080:login:password

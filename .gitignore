@@ -32,3 +32,5 @@ current_captcha.png
 
 # fabric loom
 fabric-worker/run/
+
+logs/
