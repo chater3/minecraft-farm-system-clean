@@ -14,7 +14,7 @@ import {
 } from 'minecraft-launcher-lib';
 import { updateStatus } from '../database/db';
 import { log, logError, LOG_DIR } from '../logger';
-import { nextProxyJvmArgs } from '../proxy/proxyBridge';
+import { nextProxyAssignment } from '../proxy/proxyBridge';
 import 'dotenv/config';
 
 const concurrencyLimit = parseInt(process.env.MAX_CONCURRENT_WORKERS || '1', 10);
@@ -131,6 +131,7 @@ const FAILURE_MARKERS = [
   'вы были кикнуты',
   'kicked by',
   'disconnect.kicked',
+  'максимальное количество аккаунтов',
   'STATE EXIT 3',
   'STATE EXIT 4',
   'STATE EXIT 5',
@@ -217,10 +218,14 @@ export function enqueueRegistration(username: string, password: string): Promise
         log(`[Preflight] Убраны дубли библиотек из classpath: ${droppedLibs.join(', ')}`);
       }
 
-      const proxyArgs = nextProxyJvmArgs(username);
-      if (proxyArgs.length > 0) {
-        log(`[Preflight] JVM proxy args: ${proxyArgs.join(' ')}`);
+      const proxy = nextProxyAssignment(username);
+      if (proxy.socksArgs.length > 0) {
+        log(`[Preflight] JVM proxy args: ${proxy.socksArgs.join(' ')}`);
       }
+      // игровой TCP идёт через локальный туннель прокси (иначе сервер видит реальный IP
+      // и сразу упираемся в лимит аккаунтов на IP); без прокси — подключаемся напрямую
+      const joinAddress = proxy.gameAddress ?? SERVER_HOST;
+      log(`[Queue] Адрес подключения клиента: ${joinAddress}${proxy.gameAddress ? ` (туннель → ${SERVER_HOST}:${process.env.MINECRAFT_SERVER_PORT || '25565'})` : ' (прямое подключение)'}`);
 
       const launcher = new Launcher({
         auth: new OfflineAuthenticator(username).getAuth(),
@@ -236,11 +241,11 @@ export function enqueueRegistration(username: string, password: string): Promise
             Argument.from([`-Xms${MEMORY_MIN}`]),
             Argument.from([`-Dfarm.password=${password}`]),
             Argument.from([`-Dfarm.username=${username}`]),
-            ...proxyArgs.map((a) => Argument.from([a])),
+            ...proxy.socksArgs.map((a) => Argument.from([a])),
           ],
         },
         overrides: {
-          quickPlayMultiplayer: SERVER_HOST,
+          quickPlayMultiplayer: joinAddress,
           clientid: '',
           auth_xuid: '',
         },

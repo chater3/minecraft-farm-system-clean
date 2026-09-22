@@ -71,3 +71,5 @@ AutoBatchD:AutoPass123:SUCCESS
 AutoBatchE:AutoPass123:SUCCESS
 AutoBatchF:AutoPass123:SUCCESS
 Auto_5205:AutoPass123:FAILED
+Auto_5164:AutoPass123:FAILED
+Auto_3351:AutoPass123:SUCCESS

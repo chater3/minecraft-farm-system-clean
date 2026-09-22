@@ -26,6 +26,16 @@ const DEFAULT_FILES = [
 
 export const PROXY_ENABLED = (process.env.PROXY_ENABLED || 'true').toLowerCase() !== 'false';
 const BRIDGE_BASE_PORT = parseInt(process.env.PROXY_BRIDGE_PORT || '2081', 10);
+/**
+ * Игровой туннель: Netty в Minecraft игнорирует -DsocksProxyHost, поэтому
+ * сам игровой TCP (слот/логин) идёт в обход прокси. Решение: поднимаем
+ * локальный TCP-слушатель на КАЖДЫЙ слот прокси (127.0.0.1:22081+i),
+ * клиент стучится в него, а мы делаем HTTP CONNECT до игрового сервера
+ * через HTTP-прокси Webshare. Сервер видит IP прокси, а не реальный.
+ */
+const GAME_BASE_PORT = parseInt(process.env.PROXY_GAME_PORT || '22081', 10);
+const GAME_HOST = process.env.MINECRAFT_SERVER || 'mc.funtime.su';
+const GAME_PORT = parseInt(process.env.MINECRAFT_SERVER_PORT || '25565', 10);
 
 export function loadProxies(): ProxyEntry[] {
   const files = (process.env.PROXY_FILES || DEFAULT_FILES.join(';'))
@@ -112,14 +122,27 @@ export function initProxies(): Promise<number> {
   );
 }
 
-/** JVM-аргументы SOCKS для очередного клиента (или [] если прокси нет). */
-export function nextProxyJvmArgs(label: string): string[] {
-  if (proxies.length === 0) return [];
-  const p = proxies[cursor % proxies.length];
+/** Выдача слота прокси для очередного клиента: SOCKS-мост (authlib) + игровой туннель (Netty). */
+export type ProxyAssignment = {
+  socksArgs: string[];
+  /** Адрес для --quickPlayMultiplayer (127.0.0.1:<порт>) или null, если прокси нет */
+  gameAddress: string | null;
+};
+
+export function nextProxyAssignment(label: string): ProxyAssignment {
+  if (proxies.length === 0) return { socksArgs: [], gameAddress: null };
+  const idx = cursor % proxies.length;
   cursor++;
-  const port = BRIDGE_BASE_PORT + ((cursor - 1) % proxies.length);
-  log(`[Proxy] ${label} → мост 127.0.0.1:${port} → ${p.host}:${p.port}`);
-  return [`-DsocksProxyHost=127.0.0.1`, `-DsocksProxyPort=${port}`];
+  const socksPort = BRIDGE_BASE_PORT + idx;
+  const gamePort = GAME_BASE_PORT + idx;
+  const p = proxies[idx];
+  log(
+    `[Proxy] ${label} → мост 127.0.0.1:${socksPort} + игровой туннель 127.0.0.1:${gamePort} → HTTP ${p.host}:${p.port}`,
+  );
+  return {
+    socksArgs: ['-DsocksProxyHost=127.0.0.1', `-DsocksProxyPort=${socksPort}`],
+    gameAddress: `127.0.0.1:${gamePort}`,
+  };
 }
 
 /* ---------------- SOCKS5 → HTTP CONNECT мост ---------------- */
@@ -132,6 +155,16 @@ export function startBridge(): boolean {
       server.on('error', (err) => logError(`[Proxy] Ошибка моста 127.0.0.1:${port}:`, err));
       server.listen(port, '127.0.0.1', () => {
         log(`[Proxy] SOCKS5 мост 127.0.0.1:${port} → HTTP ${p.host}:${p.port}`);
+      });
+      servers.push(server);
+    });
+    // игровой TCP-туннель: 127.0.0.1:22081+i → CONNECT mc.funtime.su:25565 через прокси
+    proxies.forEach((p, i) => {
+      const port = GAME_BASE_PORT + i;
+      const server = net.createServer((sock) => handleGameClient(sock, p));
+      server.on('error', (err) => logError(`[Proxy] Ошибка игрового туннеля 127.0.0.1:${port}:`, err));
+      server.listen(port, '127.0.0.1', () => {
+        log(`[Proxy] Игровой туннель 127.0.0.1:${port} → CONNECT ${GAME_HOST}:${GAME_PORT} через ${p.host}:${p.port}`);
       });
       servers.push(server);
     });
@@ -150,6 +183,185 @@ export function stopBridge(): void {
   }
   servers.length = 0;
   bridgeStarted = false;
+}
+
+/**
+ * Первый пакет клиента — Handshake (id=0x00): VarInt длина, id, protoVer,
+ * String адрес, u16 port, VarInt next_state. NeoProtect (FunTime) выбирает
+ * бэкенд по строке адреса: клиент шлёт туда адрес локального туннеля
+ * (127.0.0.1:22081) и получает кик "domain is not registered" — переписываем
+ * на реальный хост игрового сервера. Тail после первого пакета не трогаем.
+ */
+function rewriteHandshake(buf: Buffer): Buffer | null {
+  let o = 0;
+  const readVarInt = (): number | null => {
+    let v = 0;
+    let shift = 0;
+    for (;;) {
+      if (o >= buf.length) return null;
+      const b = buf[o++];
+      v |= (b & 0x7f) << shift;
+      if ((b & 0x80) === 0) return v >>> 0;
+      shift += 7;
+      if (shift > 35) return null;
+    }
+  };
+
+  const totalLen = readVarInt();
+  if (totalLen === null || totalLen <= 0 || totalLen > 4096) return null;
+  const bodyStart = o;
+  const bodyEnd = bodyStart + totalLen;
+  if (bodyEnd > buf.length) return null; // пакет пришёл не целиком
+
+  const id = readVarInt();
+  if (id !== 0) return null; // вне handshake состояния такого пакета быть не должно
+  const proto = readVarInt();
+  if (proto === null) return null;
+  const afterProto = o; // id + proto в исходных байтах
+
+  const addrLen = readVarInt();
+  if (addrLen === null || addrLen < 0 || addrLen > 255) return null;
+  if (o + addrLen + 2 > bodyEnd) return null;
+  const portAt = o + addrLen;
+  const tailAt = portAt + 2; // далее идёт VarInt next_state (последнее поле)
+  if (tailAt > bodyEnd) return null;
+
+  const newAddr = Buffer.from(GAME_HOST, 'utf8');
+  const portBuf = Buffer.alloc(2);
+  portBuf.writeUInt16BE(GAME_PORT);
+
+  const newBody = Buffer.concat([
+    buf.slice(bodyStart, afterProto), // id + protocol version как есть
+    encodeVarInt(newAddr.length),
+    newAddr,
+    portBuf,
+    buf.slice(tailAt, bodyEnd), // next_state
+  ]);
+  return Buffer.concat([encodeVarInt(newBody.length), newBody, buf.slice(bodyEnd)]);
+}
+
+function encodeVarInt(value: number): Buffer {
+  const bytes: number[] = [];
+  let v = value >>> 0;
+  do {
+    let b = v & 0x7f;
+    v >>>= 7;
+    if (v !== 0) b |= 0x80;
+    bytes.push(b);
+  } while (v !== 0);
+  return Buffer.from(bytes);
+}
+
+/** Начало выглядит как Handshake (id=0x00), но пакет ещё не дочитан — стоит подождать. */
+function isIncompleteHandshake(buf: Buffer): boolean {
+  let o = 0;
+  const readVarInt = (): number | null => {
+    let v = 0;
+    let shift = 0;
+    for (;;) {
+      if (o >= buf.length) return null;
+      const b = buf[o++];
+      v |= (b & 0x7f) << shift;
+      if ((b & 0x80) === 0) return v >>> 0;
+      shift += 7;
+      if (shift > 35) return null;
+    }
+  };
+  const totalLen = readVarInt();
+  if (totalLen === null) return true;
+  const bodyStart = o;
+  const id = readVarInt();
+  if (id === null) return true;
+  if (id !== 0) return false;
+  return buf.length < bodyStart + totalLen;
+}
+
+/**
+ * Приём подключения от Minecraft и немедленный HTTP CONNECT до игрового сервера
+ * через Webshare-прокси (без SOCKS-рукопожатия — клиент думает, что это сам сервер).
+ * Первый пакет (Handshake) переписываем на реальный адрес сервера — см. rewriteHandshake.
+ */
+function handleGameClient(client: net.Socket, up: ProxyEntry): void {
+  const auth = Buffer.from(`${up.user}:${up.pass}`).toString('base64');
+  const request =
+    `CONNECT ${GAME_HOST}:${GAME_PORT} HTTP/1.1\r\n` +
+    `Host: ${GAME_HOST}:${GAME_PORT}\r\n` +
+    `Proxy-Authorization: Basic ${auth}\r\n` +
+    `Proxy-Connection: keep-alive\r\n\r\n`;
+
+  let connected = false;
+  let flushed = false;
+  let headerDone = false;
+  let headerBuf = Buffer.alloc(0);
+  const pending: Buffer[] = [];
+  let upstream: net.Socket | null = null;
+
+  const fail = (why: string) => {
+    logError(`[Proxy] Игровой туннель: ${why}`);
+    client.destroy();
+    upstream?.destroy();
+  };
+
+  // отправляем накопленные байты клиента после 200 OK, переписав Handshake
+  const flushPending = () => {
+    if (!connected || flushed || pending.length === 0 || !upstream) return;
+    const pre = Buffer.concat(pending);
+    const rewritten = rewriteHandshake(pre);
+    if (rewritten) {
+      pending.length = 0;
+      flushed = true;
+      log(`[Proxy] ИГРА Handshake переписан: → ${GAME_HOST}:${GAME_PORT}`);
+      upstream.write(rewritten);
+      return;
+    }
+    if (isIncompleteHandshake(pre)) return; // пакет пришёл частями — ждём хвост
+    pending.length = 0;
+    flushed = true;
+    logError('[Proxy] ИГРА Handshake не распознан — отправляем без перезаписи');
+    upstream.write(pre);
+  };
+
+  upstream = net.connect({ host: up.host, port: up.port }, () => {
+    upstream!.write(request);
+  });
+
+  upstream.on('data', (d: Buffer) => {
+    if (!headerDone) {
+      headerBuf = Buffer.concat([headerBuf, d]);
+      const idx = headerBuf.indexOf('\r\n\r\n');
+      if (idx === -1) {
+        if (headerBuf.length > 16384) fail('слишком большой ответ прокси');
+        return;
+      }
+      headerDone = true;
+      const statusLine = headerBuf.slice(0, idx).toString('utf8').split('\r\n')[0] || '';
+      if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
+        fail(`CONNECT ${GAME_HOST}:${GAME_PORT} через ${up.host}:${up.port} → ${statusLine}`);
+        return;
+      }
+      connected = true;
+      log(`[Proxy] ИГРА ${client.remoteAddress ?? '?'}:${client.remotePort ?? 0} → ${GAME_HOST}:${GAME_PORT} через ${up.host}:${up.port} → 200 OK`);
+      const rest = headerBuf.slice(idx + 4);
+      if (rest.length) client.write(rest);
+      flushPending();
+      return;
+    }
+    client.write(d);
+  });
+
+  client.on('data', (d: Buffer) => {
+    if (!flushed) {
+      pending.push(d);
+      flushPending(); // сработает, когда придёт 200 OK от прокси
+      return;
+    }
+    if (connected) upstream!.write(d);
+  });
+
+  client.on('error', () => upstream?.destroy());
+  client.on('close', () => upstream?.destroy());
+  upstream.on('error', (err) => fail(`upstream ${up.host}:${up.port}: ${err.message}`));
+  upstream.on('close', () => client.destroy());
 }
 
 const SOCKS_FAIL = Buffer.from([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
