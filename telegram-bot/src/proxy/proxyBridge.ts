@@ -130,12 +130,52 @@ export type ProxyAssignment = {
   socksArgs: string[];
   /** Адрес для --quickPlayMultiplayer (127.0.0.1:<порт>) или null, если прокси нет */
   gameAddress: string | null;
+  /** Ключ прокси (host:port:user) — для пометки «лимит исчерпан» */
+  proxyKey: string;
 };
 
+/**
+ * Прокси, чей IP уперся в лимит аккаунтов FunTime («максимальное количество
+ * аккаунтов») — больше не выдаём до конца сессии, иначе пачка тратит слоты
+ * впустую на заведомо обречённые IP.
+ */
+const capped = new Set<string>();
+
+function proxyKey(p: ProxyEntry): string {
+  return `${p.host}:${p.port}:${p.user}`;
+}
+
+/** Пометить прокси исчерпанным (вызывается из taskManager по сообщению сервера) */
+export function capProxy(key: string): void {
+  if (!key || capped.has(key)) return;
+  capped.add(key);
+  const free = proxies.filter((p) => !capped.has(proxyKey(p))).length;
+  logError(
+    `[Proxy] ${key} исчерпал лимит аккаунтов на IP — исключён из ротации (свободных: ${free}/${proxies.length})`,
+  );
+  if (free === 0) {
+    logError('[Proxy] ВСЕ прокси исчерпали лимит! Обновите proxy/proxies.txt — регистрации будут падать.');
+  }
+}
+
 export function nextProxyAssignment(label: string): ProxyAssignment {
-  if (proxies.length === 0) return { socksArgs: [], gameAddress: null };
-  const idx = cursor % proxies.length;
-  cursor++;
+  if (proxies.length === 0) return { socksArgs: [], gameAddress: null, proxyKey: '' };
+  // ищем ближайший НЕзабитый слот (капнутые прокси пропускаем)
+  let idx = -1;
+  for (let i = 0; i < proxies.length; i++) {
+    const cand = (cursor + i) % proxies.length;
+    if (!capped.has(proxyKey(proxies[cand]))) {
+      idx = cand;
+      break;
+    }
+  }
+  if (idx === -1) {
+    idx = cursor % proxies.length;
+    logError(
+      `[Proxy] ${label}: ВСЕ прокси без лимита исчерпаны — пробуем ${proxyKey(proxies[idx])} всё равно`,
+    );
+  }
+  cursor = idx + 1;
   const socksPort = BRIDGE_BASE_PORT + idx;
   const gamePort = GAME_BASE_PORT + idx;
   const p = proxies[idx];
@@ -145,6 +185,7 @@ export function nextProxyAssignment(label: string): ProxyAssignment {
   return {
     socksArgs: ['-DsocksProxyHost=127.0.0.1', `-DsocksProxyPort=${socksPort}`],
     gameAddress: `127.0.0.1:${gamePort}`,
+    proxyKey: proxyKey(p),
   };
 }
 

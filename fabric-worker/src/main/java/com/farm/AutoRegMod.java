@@ -73,6 +73,9 @@ public class AutoRegMod implements ClientModInitializer {
     private int lastFrameCount = -1;
     private int stableScans = 0;
 
+    private boolean hadPlayer = false;
+    private int nullTicks = 0;
+
     @Override
     public void onInitializeClient() {
         System.out.println("[FarmWorker] v5 запущен: скрытый HUD + кроп стены + повтор при ошибке");
@@ -112,12 +115,39 @@ public class AutoRegMod implements ClientModInitializer {
             } else if (text.contains("спешная регистрация") || text.contains("Добро пожаловать")) {
                 regConfirmed = true;
                 System.out.println("[FarmWorker] STATE REG_OK: " + text.trim());
+            } else if (text.contains("Ник-нейм уже занят") || text.contains("ник-нейм уже занят")) {
+                System.out.println("[FarmWorker] STATE EXIT 9: ник уже занят — аккаунт существует, /reg бессмыслен");
+                System.exit(9);
+            } else if (text.toLowerCase().contains("максимальное количество аккаунтов")) {
+                System.out.println("[FarmWorker] STATE EXIT 8: лимит аккаунтов на IP исчерпан — кик");
+                System.exit(8);
+            } else if (text.toLowerCase().contains("были кикнуты") || text.toLowerCase().contains("кикнут:")) {
+                System.out.println("[FarmWorker] STATE EXIT 8: кикнут с сервера: " + text.trim());
+                System.exit(8);
             } else if (text.toLowerCase().contains("егистр")) {
                 System.out.println("[FarmWorker] STATE REG_CONFIRM: " + text);
             }
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            // Кик/разрыв: экран Disconnect* или игрок пропал после входа — задача
+            // завершена, выходим сразу, не дожидаясь 7-минутного таймаута бота
+            // (имя экрана берём как строку — не зависем от маппингов пакетов)
+            if (client.currentScreen != null) {
+                String scr = client.currentScreen.getClass().getSimpleName();
+                if (scr.contains("Disconnect") || scr.contains("UnableToConnect")) {
+                    System.out.println("[FarmWorker] STATE EXIT 8: разрыв соединения (экран: " + scr + ")");
+                    System.exit(8);
+                }
+            }
+            if (client.player != null && client.world != null) {
+                hadPlayer = true;
+                nullTicks = 0;
+            } else if (hadPlayer && ++nullTicks > 20) {
+                // >1с без игрока после входа — соединение потеряно (переживаем смену игрока)
+                System.out.println("[FarmWorker] STATE EXIT 8: соединение с сервером потеряно после входа");
+                System.exit(8);
+            }
             if (client.player == null || client.world == null) {
                 ticksInWorld = 0;
                 dumped = false;
