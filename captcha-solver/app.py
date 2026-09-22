@@ -84,6 +84,11 @@ def process_captcha(image_path):
         t = _predict(image_path, imgsz)
         if t:
             texts.append(t)
+            # быстрый путь: 640 уже нашёл >=5 цифр — доверяем, без прогонов
+            # 960/1280 (каждый ~0.5с на CPU). Иначе — прежний голосование.
+            if imgsz == 640 and len(t) >= 5:
+                logger.info(f"Быстрый путь (imgsz=640, {len(t)} цифр): {t}")
+                return t
 
     if not texts:
         return ""
@@ -130,4 +135,5 @@ def solve():
 if __name__ == '__main__':
     print("Запуск сервера распознавания капчи...")
     print("Эндпоинт: http://0.0.0.0:5000/solve (POST)")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # threaded: параллельные клиенты не ждут друг друга в очереди на инференс
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
