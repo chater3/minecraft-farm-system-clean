@@ -147,14 +147,32 @@ function classifyOutput(lines: string[]): { ok: boolean; why: string } {
   const all = lines.join('\n');
   const lower = all.toLowerCase();
 
-  for (const marker of FAILURE_MARKERS) {
-    if (lower.includes(marker.toLowerCase())) {
-      return { ok: false, why: `найден маркер провала: "${marker}"` };
-    }
-  }
+  // УСПЕХ приоритетнее провала: регистрация уже завершена на сервере, а EXIT 8
+  // («соединение потеряно после входа»/кик) часто приходит ПОСЛЕ /reg и раньше
+  // помечала готовый аккаунт как FAILED.
   for (const marker of SUCCESS_MARKERS) {
     if (all.includes(marker)) {
-      return { ok: true, why: `найден маркер успеха: "${marker}"` };
+      const laterFail = FAILURE_MARKERS.find((m) => lower.includes(m.toLowerCase()));
+      return {
+        ok: true,
+        why: laterFail
+          ? `маркер успеха "${marker}" (затем кик: "${laterFail}")`
+          : `найден маркер успеха: "${marker}"`,
+      };
+    }
+  }
+
+  // факт отправки /reg запоминаем в формулировке: он нужен логике повторов —
+  // если после обрыва повторный заход сообщает «ник занят», значит наш /reg
+  // успел пройти и аккаунт на самом деле создан
+  const regSent = all.includes('STATE REG_SEND') || all.includes('REG_RESEND');
+
+  for (const marker of FAILURE_MARKERS) {
+    if (lower.includes(marker.toLowerCase())) {
+      return {
+        ok: false,
+        why: `найден маркер провала: "${marker}"${regSent ? ' (отправлялся /reg)' : ''}`,
+      };
     }
   }
   return { ok: false, why: 'маркеров успеха не найдено' };
@@ -357,16 +375,36 @@ export function enqueueRegistration(
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }) as Promise<RegistrationResult>).then(async (result) => {
-    // Одиночный повтор: EXIT 3/4 означает, что аккаунт на сервере НЕ создан
-    // (кик/таймаут BotFilter/подтверждения) — повтор с новым прокси безопасен
-    // и превращает падение пачки в успех. Лимит IP (EXIT 8) не повторяем.
-    const retryable =
-      result.status === 'FAILED' &&
-      (result.detail.includes('STATE EXIT 3') || result.detail.includes('STATE EXIT 4'));
-    if (retryable && attempt < 1) {
-      log(`[Queue] Повтор 2/2 для ${username}: ${result.detail}`);
-      await new Promise((r) => setTimeout(r, 1500));
-      return enqueueRegistration(username, password, attempt + 1);
+    if (result.status === 'FAILED') {
+      const regSent = result.detail.includes('отправлялся /reg');
+      const exit9 = result.detail.includes('STATE EXIT 9');
+
+      // Повтор после EXIT 9: первый заход оборвался ПОСЛЕ отправки /reg,
+      // повторный вход говорит «ник занят» → это НАШ аккаунт, регистрация
+      // прошла, просто подтверждение потерялось вместе с соединением.
+      if (exit9 && attempt >= 1 && regSent) {
+        log(`[Queue] ${username}: ник занят на повторе — /reg успел пройти, аккаунт создан ✅`);
+        updateStatus(username, 'SUCCESS');
+        return {
+          username,
+          status: 'SUCCESS',
+          detail: 'ник занят после повтора — /reg успел пройти, аккаунт создан',
+        };
+      }
+
+      // Одиночный повтор с НОВЫМ прокси:
+      //  - EXIT 3/4 — кик/таймаут BotFilter, аккаунт на сервере НЕ создан;
+      //  - EXIT 8 — лимит IP или обрыв соединения после входа, на свежем IP
+      //    часто проходит (капнутый прокси ротация уже исключила);
+      //  - «маркеров не найдено» — клиент закрылся без объяснимой причины.
+      // НЕ повторяем таймаут задачи (7 мин) и ошибку запуска процесса.
+      const fatal =
+        result.detail.includes('timeout after') || result.detail.includes('process error');
+      if (!fatal && attempt < 1) {
+        log(`[Queue] Повтор 2/2 для ${username}: ${result.detail}`);
+        await new Promise((r) => setTimeout(r, 1500));
+        return enqueueRegistration(username, password, attempt + 1);
+      }
     }
     return result;
   });

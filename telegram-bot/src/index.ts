@@ -18,7 +18,7 @@ import { addAccount, getStats, resetInProgress, getKnownUsernames, getStatus } f
 import { generateNicknames } from './nickname';
 import { saveAccountFiles } from './export';
 import { log, logError, createRunLog, getRunLog } from './logger';
-import { initProxies, startBridge } from './proxy/proxyBridge';
+import { initProxies, startBridge, getProxyStats } from './proxy/proxyBridge';
 import 'dotenv/config';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -32,6 +32,24 @@ const DEFAULT_PASSWORD = process.env.DEFAULT_REG_PASSWORD || 'AutoPass123';
 const MAX_BATCH = parseInt(process.env.MAX_BATCH || '100', 10);
 
 const bot = new Bot(BOT_TOKEN);
+
+/** Лимит Telegram на сообщение — режем итоги пачки, иначе Grammy падает с 400 */
+const TG_MSG_LIMIT = 4000;
+
+/** Отправить длинный текст частями (по строкам), не упираясь в лимит Telegram */
+async function sendChunked(ctx: Context, text: string): Promise<void> {
+  let chunk = '';
+  for (const line of text.split('\n')) {
+    const candidate = chunk ? `${chunk}\n${line}` : line;
+    if (candidate.length > TG_MSG_LIMIT) {
+      if (chunk) await ctx.reply(chunk);
+      chunk = line.length > TG_MSG_LIMIT ? line.slice(0, TG_MSG_LIMIT) : line;
+    } else {
+      chunk = candidate;
+    }
+  }
+  if (chunk) await ctx.reply(chunk);
+}
 
 /* ---------- диагностика на старте ---------- */
 
@@ -95,13 +113,14 @@ bot.command('start', (ctx) =>
 
 bot.command('stats', (ctx) => {
   const s = getStats();
+  const ps = getProxyStats();
   return ctx.reply(
     `📊 Статистика:\n\n` +
       `Всего обработано: ${s.total}\n` +
       `В процессе: ⏳ ${s.inProgress}\n` +
       `Успешно: ✅ ${s.success}\n` +
       `Ошибки: ❌ ${s.failed}\n\n` +
-      `Captcha-сервер: ${solverUp ? '✅' : '❌'} | Прокси: ${proxyCount > 0 ? `✅ ${proxyCount} шт.` : '❌'}`,
+      `Captcha-сервер: ${solverUp ? '✅' : '❌'} | Прокси: ${ps.total > 0 ? `✅ ${ps.free}/${ps.total} свободно (капнутых: ${ps.capped})` : '❌'}`,
   );
 });
 
@@ -150,12 +169,17 @@ async function runBatch(ctx: Context, users: string[], password: string): Promis
     }
   }
   if (blocked.length > 0) {
-    await ctx.reply(`⚠️ Пропущены (уже в базе): ${blocked.join(', ')}`);
+    await sendChunked(ctx, `⚠️ Пропущены (уже в базе): ${blocked.join(', ')}`);
   }
   if (users.length === 0) return;
 
-  await ctx.reply(
+  const ps = getProxyStats();
+  await sendChunked(
+    ctx,
     `🚀 В очередь: ${users.length} акк. | пароль: ${password}\n` +
+      `Прокси свободно: ${ps.free}/${ps.total}` +
+      (ps.free < 10 ? ` ⚠️ мало — добавьте свежие в proxy/proxies.txt` : '') +
+      '\n' +
       users.map((u) => `• ${u}`).join('\n'),
   );
 
@@ -178,10 +202,12 @@ async function runBatch(ctx: Context, users: string[], password: string): Promis
   );
   const ok = results.filter((r) => r.status === 'SUCCESS').length;
 
-  await ctx.reply(
+  await sendChunked(
+    ctx,
     `📋 ИТОГ ПАЧКИ: ${ok}/${results.length} успешно\n\n` +
       lines.join('\n') +
       `\n\nБД: всего ${stats.total} | успех ${stats.success} | ошибка ${stats.failed}` +
+      `\nПрокси: ${ps.free}/${ps.total} свободно` +
       `\nФайлы обновлены:\n• success-accounts.txt (${stats.success})\n• accounts-all.txt (${stats.total})`,
   );
 

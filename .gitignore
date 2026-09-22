@@ -29,6 +29,8 @@ temp_captcha/
 hs_err_*.log
 replay_*.log
 current_captcha.png
+logs/screenshots/
+proxy/capped.txt
 
 # fabric loom
 fabric-worker/run/
